@@ -227,7 +227,10 @@
     s.className = 'w';
     s.textContent = w;
     if (i === WRONG) { var t = document.createElement('span'); t.className = 'tag'; t.textContent = 'heard “sinks”'; s.appendChild(t); }
+    s.tabIndex = 0;
+    s.setAttribute('role', 'button');
     s.onclick = function () { say(w.replace(/[.,]/g, '')); };
+    s.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); s.onclick(); } };
     sentence.appendChild(s);
     return s;
   });
