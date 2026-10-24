@@ -214,9 +214,8 @@ header {
   // a button that looks like the word: the sentence's own type, no button chrome
   .w {
     position: relative;
-    // an unbreakable word (a URL, a long token) would otherwise run the whole line past the box
-    // and scroll the sentence sideways; let it break so the line stays inside
-    overflow-wrap: anywhere;
+    // whole while fit() shrinks the type; a word too wide for the box even at the smallest type (a URL) breaks
+    overflow-wrap: var(--word-wrap, normal);
     appearance: none;
     margin: 0;
     border: 0;

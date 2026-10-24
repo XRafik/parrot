@@ -1,55 +1,62 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fitTo } from './fit';
 
 /**
- * fit() shrinks the sentence's type until the text fits the box, or down to the
- * 18 px floor (longer text keeps scrolling). The layout engine is stood in for
- * by mocking the element's dimension getters as a function of the current font
- * size (read back off the inline style), the way a real element would report
- * them. getComputedStyle is mocked to report the CSS size the text started at
- * (the .sentence class), since fitTo clears the inline style before reading it.
+ * A sentence box of 316 × 400 px whose text measures as `width(size, wrapped)` across, in the type size set on it
+ * (33 px, the sentence's own, when none is); the layout engine is stood in for, as jsdom has none.
  */
-function sentenceBox(scroll: (size: number) => number, clientW: number, clientH: number, initial: number) {
-  const el = document.createElement('p');
-  document.body.appendChild(el);
-  const size = () => {
-    const m = el.style.fontSize.match(/([\d.]+)px/);
-    return m ? parseFloat(m[1]) : initial;
-  };
-  vi.spyOn(el, 'scrollWidth', 'get').mockImplementation(() => scroll(size()));
-  vi.spyOn(el, 'scrollHeight', 'get').mockReturnValue(0);
-  vi.spyOn(el, 'clientWidth', 'get').mockReturnValue(clientW);
-  vi.spyOn(el, 'clientHeight', 'get').mockReturnValue(clientH);
-  vi.spyOn(window, 'getComputedStyle').mockReturnValue({ fontSize: `${initial}px` } as CSSStyleDeclaration);
-  return el;
+function sentenceBox(width: (size: number, wrapped: boolean) => number, height = () => 0) {
+  const sentence = document.createElement('p');
+  document.body.append(sentence);
+  const size = () => parseFloat(sentence.style.fontSize) || 33;
+  const wrapped = () => sentence.style.getPropertyValue('--word-wrap') === 'anywhere';
+  vi.spyOn(sentence, 'scrollWidth', 'get').mockImplementation(() => width(size(), wrapped()));
+  vi.spyOn(sentence, 'scrollHeight', 'get').mockImplementation(() => height());
+  vi.spyOn(sentence, 'clientWidth', 'get').mockReturnValue(316);
+  vi.spyOn(sentence, 'clientHeight', 'get').mockReturnValue(400);
+  vi.spyOn(window, 'getComputedStyle').mockReturnValue({ fontSize: '33px' } as CSSStyleDeclaration);
+  return sentence;
 }
 
-describe('fitTo', () => {
-  beforeEach(() => vi.restoreAllMocks());
-
-  it('shrinks a word that overflows the box sideways down to where it fits (a URL in a sentence)', () => {
-    // at 33 px the 54-char URL is 502 px wide in a 316 px box: the sentence
-    // used to scroll 202 px sideways. Shrinking must continue until it holds.
-    const el = sentenceBox((s) => (s >= 25 ? 502 : 300), 316, 400, 33);
-    expect(fitTo(el)).toBe(24);
-    expect(el.style.fontSize).toBe('24px');
+describe('fitting a sentence to its box', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.replaceChildren();
   });
 
-  it('keeps a word that already fits in both directions at full size', () => {
-    const el = sentenceBox(() => 300, 316, 400, 33);
-    expect(fitTo(el)).toBe(33);
-    // nothing was shrunken: the class's own size stays in charge
-    expect(el.style.fontSize).toBe('');
+  it('shrinks a long word until it fits whole, without breaking it', () => {
+    // "Pneumonoultramicroscopic" is 340 px wide at 33 px: it fits at 30
+    const sentence = sentenceBox((size) => Math.round(340 * (size / 33)));
+    expect(fitTo(sentence)).toBe(30);
+    expect([sentence.style.fontSize, sentence.style.getPropertyValue('--word-wrap')]).toEqual(['30px', '']);
   });
 
-  it('still shrinks text that overflows the height, as before', () => {
-    const el = sentenceBox(() => 0, 316, 400, 33);
-    vi.spyOn(el, 'scrollHeight', 'get').mockImplementation(() => (el.style.fontSize === '18px' ? 380 : 430));
-    expect(fitTo(el)).toBe(18);
+  it('breaks a word too wide for the box even at the smallest type, a URL, at the sentence’s own size', () => {
+    const sentence = sentenceBox((size, wrapped) => (wrapped ? 316 : Math.round(900 * (size / 33))));
+    expect(fitTo(sentence)).toBe(33);
+    expect([sentence.style.fontSize, sentence.style.getPropertyValue('--word-wrap')]).toEqual(['', 'anywhere']);
   });
 
-  it('never shrinks below the 18 px floor (longer text keeps scrolling)', () => {
-    const el = sentenceBox(() => 900, 316, 400, 20);
-    expect(fitTo(el)).toBe(18);
+  it('keeps a sentence that fits at its own size', () => {
+    const sentence = sentenceBox(() => 300);
+    expect(fitTo(sentence)).toBe(33);
+    expect([sentence.style.fontSize, sentence.style.getPropertyValue('--word-wrap')]).toEqual(['', '']);
+  });
+
+  it('shrinks a sentence too tall for the box, down to 18 px at most', () => {
+    const sentence = sentenceBox(
+      () => 300,
+      () => 1000,
+    );
+    expect(fitTo(sentence)).toBe(18);
+  });
+
+  it('lets a word fit whole again when the box grows', () => {
+    let box = 316;
+    const sentence = sentenceBox((size, wrapped) => (wrapped ? box : Math.round(900 * (size / 33))));
+    fitTo(sentence);
+    box = 1000;
+    vi.spyOn(sentence, 'clientWidth', 'get').mockReturnValue(box);
+    expect(fitTo(sentence)).toBe(33);
+    expect(sentence.style.getPropertyValue('--word-wrap')).toBe('');
   });
 });
