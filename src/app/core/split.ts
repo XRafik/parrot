@@ -21,6 +21,11 @@ const isPunct = (word: string) => /[,;:—–)]$|[.!?]["”’)]*$/.test(word);
  */
 export function shortRanges(words: string[]): [number, number][] {
   const out: [number, number][] = [];
+  // how many words from each one on until a punctuated one, counted once from the end: scanning ahead from every
+  // word took seconds on a long sentence with no punctuation (a pasted transcript)
+  const unpunctuated = new Array<number>(words.length + 1).fill(0);
+  for (let wordIndex = words.length - 1; wordIndex >= 0; wordIndex--)
+    unpunctuated[wordIndex] = isPunct(words[wordIndex]) ? 0 : unpunctuated[wordIndex + 1] + 1;
   let start = 0;
   for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
     const len = wordIndex - start + 1;
@@ -30,8 +35,7 @@ export function shortRanges(words: string[]): [number, number][] {
       break;
     }
     // not before "and TypeScript," when a comma follows a word or two later: that cut comes a moment later
-    let toPunct = 0;
-    while (wordIndex + 1 + toPunct < words.length && !isPunct(words[wordIndex + 1 + toPunct])) toPunct++;
+    const toPunct = unpunctuated[wordIndex + 1];
     const cut =
       (isPunct(words[wordIndex]) && len >= 4 && left >= 3) ||
       (len >= 10 && CONJUNCTION.test(words[wordIndex + 1]) && left >= 4 && toPunct > 2) ||
@@ -53,7 +57,17 @@ export async function partKey(text: string): Promise<string> {
   return 'p-' + hex.slice(0, 10);
 }
 
+/** each text split, by mode and words: the same words always split the same way, so they are split (and hashed) once */
+const splits = new Map<string, Part[]>();
+
+/** The parts of a text split before, at once; undefined if it hasn't been. */
+export function splitKnown(text: string, mode: Mode): Part[] | undefined {
+  return splits.get(mode + '\n' + text);
+}
+
 export async function splitText(text: string, mode: Mode): Promise<Part[]> {
+  const known = splitKnown(text, mode);
+  if (known) return known;
   const out: Omit<Part, 'key'>[] = [];
   let w0 = 0;
   const list = mode === 'whole' ? [text.split(/\s+/).join(' ')] : sentences(text);
@@ -70,7 +84,9 @@ export async function splitText(text: string, mode: Mode): Promise<Part[]> {
     });
     w0 += words.length;
   });
-  return Promise.all(out.map(async (part) => ({ ...part, key: await partKey(part.text) })));
+  const parts = await Promise.all(out.map(async (part) => ({ ...part, key: await partKey(part.text) })));
+  splits.set(mode + '\n' + text, parts);
+  return parts;
 }
 
 /** A word without the punctuation around it, for the dictionary and the voice: at its ends only, as the engine trims it

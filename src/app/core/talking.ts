@@ -1,7 +1,7 @@
 import { computed, inject, Injectable, signal } from '@angular/core';
 import { Engine, TALK_CANCELLED } from './engine';
 import { errorMessage, Library } from './library';
-import { LeftTalk, Talk } from './models';
+import { KeptTalk, LeftTalk, Talk } from './models';
 import { Playback } from './playback';
 import { micError, Recorder } from './recorder';
 import { pick, PROMPT_SETS } from '../talk/prompts';
@@ -71,6 +71,8 @@ export class Talking {
   private started = false;
   private sendFailed: string | null = null;
   private watch = 0;
+  /** counts the talks begun: one whose start finds a newer one begun (it was cancelled meanwhile) leaves it be */
+  private starts = 0;
 
   constructor() {
     this.session.whenOpening(() => this.away());
@@ -103,6 +105,7 @@ export class Talking {
     if (this.state() !== 'idle') await this.discard();
     this.playback.stop();
     this.reset();
+    const run = ++this.starts;
     this.about.set(this.prompt());
     this.state.set('recording');
     this.sending = Promise.resolve();
@@ -111,10 +114,13 @@ export class Talking {
     try {
       await this.recorder.start('free', (pcm, rate) => this.send(pcm, rate));
     } catch (error) {
+      if (run !== this.starts) return;
       this.state.set('idle');
       this.failure.set(micError(error));
       return;
     }
+    // cancelled while the microphone got ready, and started again since: the talk now is that start's
+    if (run !== this.starts) return;
     // stopped before it got going
     if (!this.recording()) {
       if (this.state() === 'recording') this.state.set('idle');
@@ -258,20 +264,26 @@ export class Talking {
     if (this.state() !== 'preview') return;
     this.state.set('keeping');
     this.failure.set(null);
+    let kept: KeptTalk;
     try {
-      const kept = await this.engine.talkKeep(text, title);
-      this.reset();
-      // the next talk is about something else
-      this.anotherPrompt();
-      await this.library.loadTexts();
-      await this.session.open(kept.text.id, 0);
-      const first = kept.attempt.words.findIndex((word) => word.status !== 'good');
-      if (first >= 0) this.session.selectWord(first);
+      kept = await this.engine.talkKeep(text, title);
     } catch (error) {
       // still the talk being kept: nothing else may have taken the screen meanwhile
       if (this.state() !== 'keeping') return;
       this.state.set('preview');
       this.failure.set(errorMessage(error));
+      return;
+    }
+    // the check screen stays, saying it is saving, until the text is open: Home is not shown between the two
+    try {
+      await this.library.loadTexts();
+      await this.session.open(kept.text.id, 0);
+      const first = kept.attempt.words.findIndex((word) => word.status !== 'good');
+      if (first >= 0) this.session.selectWord(first);
+    } finally {
+      this.reset();
+      // the next talk is about something else
+      this.anotherPrompt();
     }
   }
 

@@ -590,6 +590,69 @@ describe('the practice state', () => {
       expect(app.index()).toBe(0);
     });
 
+    describe('switching mode or text', () => {
+      /** what the practice screen shows at each call to the engine: the text, its part, and whose try is on the part's words */
+      let shown: string[];
+      const snapshot = () => {
+        const part = app.part();
+        return `${app.text()?.title}: ${part ? part.text : 'no part'}, try of ${app.result()?.text ?? 'none'}`;
+      };
+
+      beforeEach(() => {
+        engine.library.push(engine.item({ id: 'b0b0b0b0b0', title: 'Other', text: 'One. Two. Three.' }));
+        engine.tries['Hello there.'] = [attempt('t1', 'Hello there.', 60, ['good', 'wrong'])];
+        engine.tries['One.'] = [attempt('t2', 'One.', 90)];
+        shown = [];
+        for (const call of ['updateText', 'scores', 'attempts', 'attempt'] as const) {
+          const answer = engine[call].bind(engine) as (...args: unknown[]) => unknown;
+          (engine as unknown as Record<string, unknown>)[call] = (...args: unknown[]) => {
+            shown.push(`${snapshot()} (at ${call})`);
+            return answer(...args);
+          };
+        }
+      });
+
+      it('never shows the new words with the try of the part left', async () => {
+        await app.loadTexts();
+        await app.open(ID, 0);
+        shown = [];
+        await app.setMode('whole');
+        shown.push(snapshot());
+        expect(shown).toEqual([
+          'Greeting: Hello there., try of Hello there. (at updateText)',
+          'Greeting: Hello there., try of Hello there. (at scores)',
+          'Greeting: Hello there. How are you? I am fine., try of none',
+        ]);
+      });
+
+      it('never shows no part, when the part left is past the end of the new parts', async () => {
+        await app.loadTexts();
+        await app.open(ID, 2);
+        shown = [];
+        await app.setMode('whole');
+        shown.push(snapshot());
+        expect(shown).toEqual([
+          'Greeting: I am fine., try of none (at updateText)',
+          'Greeting: I am fine., try of none (at scores)',
+          'Greeting: Hello there. How are you? I am fine., try of none',
+        ]);
+      });
+
+      it('shows the title of the text opened with its own words, and not the try of the text left', async () => {
+        await app.loadTexts();
+        await app.open(ID, 0);
+        shown = [];
+        await app.open('b0b0b0b0b0', 0);
+        expect(shown).toEqual([
+          'Greeting: Hello there., try of Hello there. (at updateText)',
+          'Greeting: Hello there., try of Hello there. (at scores)',
+          'Other: One., try of none (at attempts)',
+          'Other: One., try of none (at attempt)',
+        ]);
+        expect(snapshot()).toBe('Other: One., try of One.');
+      });
+    });
+
     it('counts the parts done and their average', async () => {
       engine.tries['Hello there.'] = [attempt('t1', 'Hello there.', 80)];
       engine.tries['I am fine.'] = [attempt('t2', 'I am fine.', 91)];
@@ -1165,6 +1228,34 @@ describe('the practice state', () => {
       expect([talking.state(), talking.talk(), talking.heardSoFar()]).toEqual(['idle', null, '']);
       expect(app.texts()[0]).toMatchObject({ id: 'abcdef0123', spoken: true, mode: 'whole' });
       expect([app.view(), app.text()?.id, app.result()?.id]).toEqual(['practice', 'abcdef0123', '20261021-100000']);
+    });
+
+    it('keeps its check screen until the text it was kept as is open: Home never shows between them', async () => {
+      await talking.start();
+      recorder.say(1);
+      await talking.stop();
+      // the screen the window shows (app.ts): the check screen while the talk is checked, else the session's view
+      const screens: string[] = [];
+      const screen = () => (talking.checking() ? 'check' : app.view());
+      for (const call of ['talkKeep', 'texts', 'updateText', 'scores', 'attempts', 'attempt'] as const) {
+        const answer = engine[call].bind(engine) as (...args: unknown[]) => unknown;
+        (engine as unknown as Record<string, unknown>)[call] = (...args: unknown[]) => {
+          screens.push(`${screen()} at ${call}`);
+          return answer(...args);
+        };
+      }
+      await talking.keep('I moved here three years ago.', 'Moving');
+      screens.push(screen());
+      expect(screens).toEqual([
+        'check at talkKeep',
+        'check at texts',
+        'check at updateText',
+        'check at scores',
+        'check at attempts',
+        'check at attempt',
+        'practice',
+      ]);
+      expect([app.text()?.id, app.result()?.id]).toEqual(['abcdef0123', '20261021-100000']);
     });
 
     describe('left from the last time Parrot ran', () => {
